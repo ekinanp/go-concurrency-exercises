@@ -11,21 +11,27 @@ package main
 import (
 	"fmt"
 	"time"
+	"sync"
 )
 
-func producer(stream Stream) (tweets []*Tweet) {
+var streamMux sync.Mutex
+
+func producer(stream *Stream, tweets chan<- *Tweet) {
 	for {
+		streamMux.Lock()
 		tweet, err := stream.Next()
+		streamMux.Unlock()
+
 		if err == ErrEOF {
-			return tweets
+			return
 		}
 
-		tweets = append(tweets, tweet)
+		tweets <- tweet
 	}
 }
 
-func consumer(tweets []*Tweet) {
-	for _, t := range tweets {
+func consumer(tweets <-chan *Tweet) {
+	for t := range tweets {
 		if t.IsTalkingAboutGo() {
 			fmt.Println(t.Username, "\ttweets about golang")
 		} else {
@@ -38,11 +44,38 @@ func main() {
 	start := time.Now()
 	stream := GetMockStream()
 
-	// Producer
-	tweets := producer(stream)
+	num_producers := 1
+	num_consumers := 1
 
-	// Consumer
-	consumer(tweets)
+	// Make the channel
+	tweets := make(chan *Tweet, 4)
+
+	// Spawn the producers
+	var producers sync.WaitGroup
+	for i := 0; i < num_producers; i++ {
+		producers.Add(1)
+		go func() {
+			producer(&stream, tweets)
+			producers.Done()
+		}()
+	}
+
+	// Spawn the consumers
+	var consumers sync.WaitGroup
+	for i := 0; i < num_consumers; i++ {
+		consumers.Add(1)
+		go func() {
+			consumer(tweets)
+			consumers.Done()
+		}()
+	}
+
+	// Wait for producers to finish, then close channel
+	producers.Wait()
+	close(tweets)
+
+	// Wait for the consumers
+	consumers.Wait()
 
 	fmt.Printf("Process took %s\n", time.Since(start))
 }
