@@ -9,6 +9,7 @@
 package main
 
 import "container/list"
+import "sync"
 
 // CacheSize determines how big the cache can grow
 const CacheSize = 100
@@ -24,6 +25,7 @@ type KeyStoreCache struct {
 	cache map[string]string
 	pages list.List
 	load  func(string) string
+	mux sync.Mutex
 }
 
 // New creates a new KeyStoreCache
@@ -36,6 +38,9 @@ func New(load KeyStoreCacheLoader) *KeyStoreCache {
 
 // Get gets the key from cache, loads it from the source if needed
 func (k *KeyStoreCache) Get(key string) string {
+	k.mux.Lock()
+	defer k.mux.Unlock()
+
 	val, ok := k.cache[key]
 
 	// Miss - load from database and save it in cache
@@ -43,7 +48,6 @@ func (k *KeyStoreCache) Get(key string) string {
 		val = k.load(key)
 		k.cache[key] = val
 		k.pages.PushFront(key)
-
 		// if cache is full remove the least used item
 		if len(k.cache) > CacheSize {
 			delete(k.cache, k.pages.Back().Value.(string))
