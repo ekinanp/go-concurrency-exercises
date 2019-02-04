@@ -20,17 +20,21 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
 type SessionManager struct {
 	sessions map[string]Session
+	mux sync.Mutex
 }
 
 // Session stores the session's data
 type Session struct {
 	Data map[string]interface{}
+	LastModified time.Time
 }
 
 // NewSessionManager creates a new sessionManager
@@ -38,6 +42,14 @@ func NewSessionManager() *SessionManager {
 	m := &SessionManager{
 		sessions: make(map[string]Session),
 	}
+
+	// Run the cleanup job in the background
+	go func() {
+		for {
+			m.CleanupExpiredSessions()
+			time.Sleep(1 * time.Second)
+		}
+	}()
 
 	return m
 }
@@ -49,8 +61,11 @@ func (m *SessionManager) CreateSession() (string, error) {
 		return "", err
 	}
 
+	m.mux.Lock()
+	defer m.mux.Unlock()
 	m.sessions[sessionID] = Session{
 		Data: make(map[string]interface{}),
+		LastModified: time.Now(),
 	}
 
 	return sessionID, nil
@@ -63,6 +78,8 @@ var ErrSessionNotFound = errors.New("SessionID does not exists")
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.mux.Lock()
+	defer m.mux.Unlock()
 	session, ok := m.sessions[sessionID]
 	if !ok {
 		return nil, ErrSessionNotFound
@@ -72,6 +89,8 @@ func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{
 
 // UpdateSessionData overwrites the old session data with the new one
 func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]interface{}) error {
+	m.mux.Lock()
+	defer m.mux.Unlock()
 	_, ok := m.sessions[sessionID]
 	if !ok {
 		return ErrSessionNotFound
@@ -80,9 +99,24 @@ func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]int
 	// Hint: you should renew expiry of the session here
 	m.sessions[sessionID] = Session{
 		Data: data,
+		LastModified: time.Now(),
 	}
 
 	return nil
+}
+
+func (m *SessionManager) CleanupExpiredSessions() {
+	m.mux.Lock()
+	defer m.mux.Unlock()
+
+	currentTime := time.Now()
+	for sessionID, session := range m.sessions {
+		timeSinceLastUpdate := currentTime.Sub(session.LastModified)
+		if timeSinceLastUpdate.Seconds() >= 5 {
+			// remove the session
+			delete(m.sessions, sessionID)
+		}
+	}
 }
 
 func main() {
